@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <title>Counter Display</title>
+    <style>
+        /* Existing Styles */
+        #statusBanner {
+            font-size: 22px;
+            font-weight: bold;
+            padding: 15px;
+            margin-bottom: 20px;
+            text-align: center;
+            border-radius: 5px;
+            font-family: sans-serif;
+            transition: all 0.3s ease;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+            border: 2px solid #c3e6cb;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 2px solid #f5c6cb;
+        }
+        #videoContainer {
+            position: relative;
+            display: inline-block;
+            margin-top: 20px;
+            border: 2px solid #333;
+        }
+        #timeOverlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: #00FF00;
+            padding: 5px 10px;
+            font-family: monospace;
+            font-size: 18px;
+            border-radius: 4px;
+            z-index: 10;
+            display: none;
+        }
+        #liveFeedBtn {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #controlPanel {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ccc;
+            display: inline-block;
+            background-color: #f9f9f9;
+        }
+        .f-btn {
+            padding: 10px 20px;
+            margin-right: 5px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            border: 1px solid #888;
+            background-color: #eee;
+            transition: background-color 0.2s;
+        }
+        .f-btn.active {
+            background-color: yellow;
+            border-color: #d4d400;
+        }
+        #commandGroup {
+            margin-top: 15px;
+        }
+        #cmdInput {
+            padding: 8px;
+            font-size: 16px;
+            width: 200px;
+        }
+        #cmdSendBtn {
+            padding: 8px 15px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        /* --- NEW RESPONSE LOG STYLES --- */
+        #logContainer {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 600px; /* Fixed width */
+        }
+        #logContainer label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            font-family: sans-serif;
+        }
+        #responseBox {
+            width: 100%;
+            height: 150px; /* Fixed height */
+            background-color: #1e1e1e;
+            color: #00ff00; /* Hacker green */
+            font-family: monospace;
+            font-size: 14px;
+            padding: 10px;
+            border: 2px solid #333;
+            border-radius: 4px;
+            resize: none; /* Prevents user from dragging the corner to resize */
+            overflow-y: auto; /* Enables vertical scrolling */
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    
+    <div id="statusBanner" class="disconnected">CAMERA DISCONNECTED</div>
+
+    <h1>LIVE CAM BY ANMOL</h1>
+    
+    <button id="liveFeedBtn">Start live feed</button>
+    <br>
+
+    <div id="videoContainer">
+        <div id="timeOverlay">Waiting for time...</div>
+        <img id="myImage" src="" style="display:none; max-width: 100%;" alt="Live Feed">
+    </div>
+
+    <div id="controlPanel">
+        <div>
+            <button id="btnF1" class="f-btn">F1</button>
+            <button id="btnF2" class="f-btn">F2</button>
+            <button id="btnF3" class="f-btn">F3</button>
+            <button id="btnF4" class="f-btn">F4</button>
+            <button id="btnF5" class="f-btn">F5</button>
+        </div>
+        
+        <div id="commandGroup">
+            <input type="text" id="cmdInput" value="0">
+            <button id="cmdSendBtn">Send Command</button>
+        </div>
+    </div>
+
+    <div id="logContainer">
+        <label for="responseBox">Response:</label>
+        <textarea id="responseBox" readonly></textarea>
+    </div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.11.0/firebase-app.js";
+  import { getDatabase, ref, onValue, set, onDisconnect } from "https://www.gstatic.com/firebasejs/10.11.0/firebase-database.js"; 
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCyURdbd0DwnmeegDRE6HdblOT9J7IQPuk",
+    authDomain: "espx-2051.firebaseapp.com",
+    databaseURL: "https://espx-2051-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "espx-2051",
+    storageBucket: "espx-2051.firebasestorage.app",
+    messagingSenderId: "627733485140",
+    appId: "1:627733485140:web:fd114b350c79789c96bfc1",
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const database = getDatabase(app); 
+
+  // --- HTML Elements ---
+  const imgElement = document.getElementById('myImage');
+  const timeElement = document.getElementById('timeOverlay');
+  const liveBtn = document.getElementById('liveFeedBtn');
+  const statusBanner = document.getElementById('statusBanner');
+  const responseBox = document.getElementById('responseBox');
+
+  // ==========================================
+  // --- MQTT BINARY VIDEO STREAMING LOGIC ---
+  // ==========================================
+  
+  const MQTT_BROKER = "wss://a7271cde1cba40d4ab590f964ed80fc4.s1.eu.hivemq.cloud:8884/mqtt"; 
+  const MQTT_OPTIONS = {
+      connectTimeout: 5000,
+      clientId: 'firebase_web_client_' + Math.random().toString(16).substr(2, 8),
+      username: 'akstark49000', // Replace with your HiveMQ Access Credentials
+      password: 'Qwerty123456'  // Replace with your HiveMQ Access Credentials
+  };
+
+  let mqttClient = null;
+  let lastFrameUrl = null;
+
+  function updateImageSrc(blob) {
+      const newUrl = URL.createObjectURL(blob);
+      imgElement.src = newUrl;
+      
+      if (lastFrameUrl) {
+          URL.revokeObjectURL(lastFrameUrl); // Free up browser memory
+      }
+      lastFrameUrl = newUrl;
+  }
+
+  function startMqttStream() {
+      // mqtt is available globally via the unpkg CDN script in the head
+      mqttClient = window.mqtt.connect(MQTT_BROKER, MQTT_OPTIONS);
+
+      mqttClient.on('connect', () => {
+          console.log('Connected to MQTT Cloud Broker via WebSockets.');
+          mqttClient.subscribe('esp32/camera/stream', (err) => {
+              if (!err) console.log('Subscribed to camera stream topic.');
+          });
+      });
+
+      mqttClient.on('message', (topic, payload) => {
+          if (topic === 'esp32/camera/stream') {
+              // Convert raw binary payload directly to JPEG
+              const blob = new Blob([payload], { type: 'image/jpeg' });
+              updateImageSrc(blob);
+          }
+      });
+
+      mqttClient.on('error', (err) => {
+          console.error('MQTT Connection Error: ', err);
+          if (mqttClient) mqttClient.end();
+      });
+  }
+
+  function stopMqttStream() {
+      if (mqttClient) {
+          mqttClient.end(true, () => {
+              console.log("MQTT client connection severed cleanly.");
+              imgElement.src = "";
+              if (lastFrameUrl) {
+                  URL.revokeObjectURL(lastFrameUrl);
+                  lastFrameUrl = null;
+              }
+          });
+      }
+  }
+
+
+  // --- CAMERA STATUS LOGIC (HEARTBEAT) ---
+  const camonRef = ref(database, 'camon');
+  let lastHeartbeatTime = Date.now(); 
+  let isCameraConnected = false;
+
+  onValue(camonRef, (snapshot) => {
+      lastHeartbeatTime = Date.now();
+      if (!isCameraConnected) {
+          isCameraConnected = true;
+          statusBanner.textContent = "CAMERA ONLINE";
+          statusBanner.className = "connected";
+      }
+  });
+
+  setInterval(() => {
+      const timeSinceLastHeartbeat = Date.now() - lastHeartbeatTime;
+      if (timeSinceLastHeartbeat > 40000) {
+          if (isCameraConnected) {
+              isCameraConnected = false;
+              statusBanner.textContent = "CAMERA OFFLINE";
+              statusBanner.className = "disconnected";
+              
+              if (isLive === 1) {
+                  isLive = 0;
+                  set(liveRef, 0); 
+                  liveBtn.textContent = "Start live feed";
+                  imgElement.style.display = 'none';
+                  timeElement.style.display = 'none';
+                  stopMqttStream(); // Ensure MQTT stream dies if camera goes offline
+              }
+          }
+      }
+  }, 1000);
+
+  // --- Live Feed Button Logic ---
+  const liveRef = ref(database, 'live');
+  let isLive = 0;
+  onDisconnect(liveRef).set(0);
+
+  liveBtn.addEventListener('click', () => {
+      isLive = isLive === 0 ? 1 : 0;
+      set(liveRef, isLive);
+      
+      liveBtn.textContent = isLive === 1 ? "Live feed started" : "Start live feed";
+      
+      if(isLive === 1) {
+          imgElement.style.display = 'block';
+          timeElement.style.display = 'block';
+          startMqttStream(); // Connect to MQTT when Live is clicked
+      } else {
+          imgElement.style.display = 'none';
+          timeElement.style.display = 'none';
+          stopMqttStream(); // Disconnect cleanly when stopped
+      }
+  });
+
+  // --- Firebase Time Rendering Logic ---
+  const timeRef = ref(database, 'cctv_time');
+  onValue(timeRef, (snapshot) => {
+      if (isLive === 1) {
+          const timeValue = snapshot.val();
+          if (timeValue) {
+              timeElement.textContent = timeValue;
+          }
+      }
+  });
+
+  // --- F1-F5 AND COMMAND LOGIC ---
+  for (let i = 1; i <= 5; i++) {
+      const btn = document.getElementById(`btnF${i}`);
+      const dbRef = ref(database, `F${i}`);
+      let state = 0;
+
+      set(dbRef, 0);
+      onDisconnect(dbRef).set(0);
+
+      btn.addEventListener('click', () => {
+          state = state === 0 ? 1 : 0;
+          set(dbRef, state);
+
+          if (state === 1) {
+              btn.classList.add('active');
+          } else {
+              btn.classList.remove('active');
+          }
+      });
+  }
+
+  const cmdInput = document.getElementById('cmdInput');
+  const cmdSendBtn = document.getElementById('cmdSendBtn');
+  const cmdRef = ref(database, 'command');
+
+  set(cmdRef, "0");
+  cmdInput.value = "0";
+  onDisconnect(cmdRef).set("0");
+
+  cmdSendBtn.addEventListener('click', () => {
+      const commandValue = cmdInput.value;
+      set(cmdRef, commandValue);
+  });
+
+  // ==========================================
+  // --- ESP32 RESPONSE LOG LOGIC ---
+  // ==========================================
+  const nlogRef = ref(database, 'nlog');
+  
+  responseBox.value = "";
+
+  onValue(nlogRef, (snapshot) => {
+      const newLog = snapshot.val();
+      
+      if (newLog) {
+          const prefix = responseBox.value === "" ? "" : "\n";
+          responseBox.value += prefix + ">> " + newLog;
+          responseBox.scrollTop = responseBox.scrollHeight;
+      }
+  });
+
+</script>	
+</body>
+</html>

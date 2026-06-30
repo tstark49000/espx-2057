@@ -3,10 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <!-- REPLACED: MQTT and Firebase scripts removed. Added Supabase CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <title>Counter Display</title>
     <style>
-        /* Existing Styles */
+        /* Existing Styles strictly retained */
         #statusBanner {
             font-size: 22px;
             font-weight: bold;
@@ -85,14 +86,12 @@
             font-size: 16px;
             cursor: pointer;
         }
-
-        /* --- NEW RESPONSE LOG STYLES --- */
         #logContainer {
             margin-top: 20px;
             display: flex;
             flex-direction: column;
             width: 100%;
-            max-width: 600px; /* Fixed width */
+            max-width: 600px;
         }
         #logContainer label {
             font-weight: bold;
@@ -101,16 +100,16 @@
         }
         #responseBox {
             width: 100%;
-            height: 150px; /* Fixed height */
+            height: 150px;
             background-color: #1e1e1e;
-            color: #00ff00; /* Hacker green */
+            color: #00ff00;
             font-family: monospace;
             font-size: 14px;
             padding: 10px;
             border: 2px solid #333;
             border-radius: 4px;
-            resize: none; /* Prevents user from dragging the corner to resize */
-            overflow-y: auto; /* Enables vertical scrolling */
+            resize: none;
+            overflow-y: auto;
             box-sizing: border-box;
         }
     </style>
@@ -149,22 +148,15 @@
         <textarea id="responseBox" readonly></textarea>
     </div>
 
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.11.0/firebase-app.js";
-  import { getDatabase, ref, onValue, set, onDisconnect } from "https://www.gstatic.com/firebasejs/10.11.0/firebase-database.js"; 
-
-  const firebaseConfig = {
-    apiKey: "AIzaSyCyURdbd0DwnmeegDRE6HdblOT9J7IQPuk",
-    authDomain: "espx-2051.firebaseapp.com",
-    databaseURL: "https://espx-2051-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "espx-2051",
-    storageBucket: "espx-2051.firebasestorage.app",
-    messagingSenderId: "627733485140",
-    appId: "1:627733485140:web:fd114b350c79789c96bfc1",
-  };
-
-  const app = initializeApp(firebaseConfig);
-  const database = getDatabase(app); 
+<script>
+  // ==========================================
+  // --- SUPABASE INITIALIZATION ---
+  // ==========================================
+  const SUPABASE_URL = "https://fctxrtzabfippyjuvjei.supabase.co"; 
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZjdHhydHphYmZpcHB5anV2amVpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI3OTY3ODgsImV4cCI6MjA5ODM3Mjc4OH0.xz-24wbR2j6oDZbiNAkhTKsr9BcnyXWH2u6rM6ckE5E";
+  
+  const { createClient } = supabase;
+  const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   // --- HTML Elements ---
   const imgElement = document.getElementById('myImage');
@@ -172,85 +164,70 @@
   const liveBtn = document.getElementById('liveFeedBtn');
   const statusBanner = document.getElementById('statusBanner');
   const responseBox = document.getElementById('responseBox');
+  const cmdInput = document.getElementById('cmdInput');
+  const cmdSendBtn = document.getElementById('cmdSendBtn');
 
-  // ==========================================
-  // --- MQTT BINARY VIDEO STREAMING LOGIC ---
-  // ==========================================
-  
-  const MQTT_BROKER = "wss://a7271cde1cba40d4ab590f964ed80fc4.s1.eu.hivemq.cloud:8884/mqtt"; 
-  const MQTT_OPTIONS = {
-      connectTimeout: 5000,
-      clientId: 'firebase_web_client_' + Math.random().toString(16).substr(2, 8),
-      username: 'akstark49000', // Replace with your HiveMQ Access Credentials
-      password: 'Qwerty123456'  // Replace with your HiveMQ Access Credentials
-  };
-
-  let mqttClient = null;
-  let lastFrameUrl = null;
-
-  function updateImageSrc(blob) {
-      const newUrl = URL.createObjectURL(blob);
-      imgElement.src = newUrl;
-      
-      if (lastFrameUrl) {
-          URL.revokeObjectURL(lastFrameUrl); // Free up browser memory
-      }
-      lastFrameUrl = newUrl;
-  }
-
-  function startMqttStream() {
-      // mqtt is available globally via the unpkg CDN script in the head
-      mqttClient = window.mqtt.connect(MQTT_BROKER, MQTT_OPTIONS);
-
-      mqttClient.on('connect', () => {
-          console.log('Connected to MQTT Cloud Broker via WebSockets.');
-          mqttClient.subscribe('esp32/camera/stream', (err) => {
-              if (!err) console.log('Subscribed to camera stream topic.');
-          });
-      });
-
-      mqttClient.on('message', (topic, payload) => {
-          if (topic === 'esp32/camera/stream') {
-              // Convert raw binary payload directly to JPEG
-              const blob = new Blob([payload], { type: 'image/jpeg' });
-              updateImageSrc(blob);
-          }
-      });
-
-      mqttClient.on('error', (err) => {
-          console.error('MQTT Connection Error: ', err);
-          if (mqttClient) mqttClient.end();
-      });
-  }
-
-  function stopMqttStream() {
-      if (mqttClient) {
-          mqttClient.end(true, () => {
-              console.log("MQTT client connection severed cleanly.");
-              imgElement.src = "";
-              if (lastFrameUrl) {
-                  URL.revokeObjectURL(lastFrameUrl);
-                  lastFrameUrl = null;
-              }
-          });
-      }
-  }
-
-
-  // --- CAMERA STATUS LOGIC (HEARTBEAT) ---
-  const camonRef = ref(database, 'camon');
+  // --- State Variables ---
+  let isLive = 0;
   let lastHeartbeatTime = Date.now(); 
   let isCameraConnected = false;
+  let lastLogStr = "";
+  let fStates = { f1: 0, f2: 0, f3: 0, f4: 0, f5: 0 };
 
-  onValue(camonRef, (snapshot) => {
+  // Update a specific field in the database helper function
+  async function updateDB(payload) {
+      await db.from('device_status').update(payload).eq('id', 1);
+  }
+
+  // ==========================================
+  // --- REALTIME DATA SYNC ---
+  // ==========================================
+  
+  // 1. Fetch initial state on page load
+  async function fetchInitialState() {
+      const { data, error } = await db.from('device_status').select('*').eq('id', 1).single();
+      if (data) processDBUpdate(data);
+  }
+
+  // 2. Process incoming row updates (Heartbeat, Image, Logs, Time)
+  function processDBUpdate(row) {
+      // Handle Heartbeat (camon)
       lastHeartbeatTime = Date.now();
       if (!isCameraConnected) {
           isCameraConnected = true;
           statusBanner.textContent = "CAMERA ONLINE";
           statusBanner.className = "connected";
       }
-  });
 
+      // Handle Image Stream
+      if (isLive === 1 && row.image_url) {
+          imgElement.src = row.image_url;
+      }
+
+      // Handle Time Update
+      if (isLive === 1 && row.cctv_time) {
+          timeElement.textContent = row.cctv_time;
+      }
+
+      // Handle Logs (Deduplicate logs since heartbeat triggers row updates)
+      if (row.nlog && row.nlog !== lastLogStr) {
+          lastLogStr = row.nlog;
+          const prefix = responseBox.value === "" ? "" : "\n";
+          responseBox.value += prefix + ">> " + row.nlog;
+          responseBox.scrollTop = responseBox.scrollHeight;
+      }
+  }
+
+  // 3. Subscribe to Realtime Postgres Changes
+  const channel = db.channel('schema-db-changes')
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'device_status', filter: 'id=eq.1' }, (payload) => {
+        processDBUpdate(payload.new);
+    })
+    .subscribe();
+
+  // ==========================================
+  // --- CONNECTION TIMEOUT LOGIC ---
+  // ==========================================
   setInterval(() => {
       const timeSinceLastHeartbeat = Date.now() - lastHeartbeatTime;
       if (timeSinceLastHeartbeat > 40000) {
@@ -261,63 +238,48 @@
               
               if (isLive === 1) {
                   isLive = 0;
-                  set(liveRef, 0); 
+                  updateDB({ live: 0 }); 
                   liveBtn.textContent = "Start live feed";
                   imgElement.style.display = 'none';
                   timeElement.style.display = 'none';
-                  stopMqttStream(); // Ensure MQTT stream dies if camera goes offline
               }
           }
       }
   }, 1000);
 
-  // --- Live Feed Button Logic ---
-  const liveRef = ref(database, 'live');
-  let isLive = 0;
-  onDisconnect(liveRef).set(0);
-
+  // ==========================================
+  // --- BUTTON AND CONTROL LOGIC ---
+  // ==========================================
+  
+  // Live Feed Button
   liveBtn.addEventListener('click', () => {
       isLive = isLive === 0 ? 1 : 0;
-      set(liveRef, isLive);
+      updateDB({ live: isLive });
       
       liveBtn.textContent = isLive === 1 ? "Live feed started" : "Start live feed";
       
       if(isLive === 1) {
           imgElement.style.display = 'block';
           timeElement.style.display = 'block';
-          startMqttStream(); // Connect to MQTT when Live is clicked
       } else {
           imgElement.style.display = 'none';
           timeElement.style.display = 'none';
-          stopMqttStream(); // Disconnect cleanly when stopped
+          imgElement.src = ""; // Clear image stream
       }
   });
 
-  // --- Firebase Time Rendering Logic ---
-  const timeRef = ref(database, 'cctv_time');
-  onValue(timeRef, (snapshot) => {
-      if (isLive === 1) {
-          const timeValue = snapshot.val();
-          if (timeValue) {
-              timeElement.textContent = timeValue;
-          }
-      }
-  });
-
-  // --- F1-F5 AND COMMAND LOGIC ---
+  // F1 to F5 Buttons
   for (let i = 1; i <= 5; i++) {
       const btn = document.getElementById(`btnF${i}`);
-      const dbRef = ref(database, `F${i}`);
-      let state = 0;
-
-      set(dbRef, 0);
-      onDisconnect(dbRef).set(0);
+      const field = `f${i}`;
 
       btn.addEventListener('click', () => {
-          state = state === 0 ? 1 : 0;
-          set(dbRef, state);
+          fStates[field] = fStates[field] === 0 ? 1 : 0;
+          
+          // Send update to database
+          updateDB({ [field]: fStates[field] });
 
-          if (state === 1) {
+          if (fStates[field] === 1) {
               btn.classList.add('active');
           } else {
               btn.classList.remove('active');
@@ -325,35 +287,28 @@
       });
   }
 
-  const cmdInput = document.getElementById('cmdInput');
-  const cmdSendBtn = document.getElementById('cmdSendBtn');
-  const cmdRef = ref(database, 'command');
-
-  set(cmdRef, "0");
+  // Command Box
   cmdInput.value = "0";
-  onDisconnect(cmdRef).set("0");
-
   cmdSendBtn.addEventListener('click', () => {
       const commandValue = cmdInput.value;
-      set(cmdRef, commandValue);
+      updateDB({ command: commandValue });
   });
 
   // ==========================================
-  // --- ESP32 RESPONSE LOG LOGIC ---
+  // --- CLEANUP ON DISCONNECT ---
   // ==========================================
-  const nlogRef = ref(database, 'nlog');
-  
+  // Replaces Firebase onDisconnect() to reset UI controls when tab closes
+  window.addEventListener('beforeunload', () => {
+      updateDB({ 
+          live: 0, 
+          f1: 0, f2: 0, f3: 0, f4: 0, f5: 0, 
+          command: "0" 
+      });
+  });
+
+  // Start Application
+  fetchInitialState();
   responseBox.value = "";
-
-  onValue(nlogRef, (snapshot) => {
-      const newLog = snapshot.val();
-      
-      if (newLog) {
-          const prefix = responseBox.value === "" ? "" : "\n";
-          responseBox.value += prefix + ">> " + newLog;
-          responseBox.scrollTop = responseBox.scrollHeight;
-      }
-  });
 
 </script>	
 </body>
